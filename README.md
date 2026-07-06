@@ -356,11 +356,48 @@ In the Admin UI, keep or update `OLLAMA_BASE_URL`, then set `MODEL` to the same 
 
 `OLLAMA_BASE_URL` is the Ollama server root; do not append `/v1`. Example model slugs include `ollama/llama3.1` and `ollama/llama3.1:8b`.
 
+### 19. [Anthropic (real Claude API)](https://console.anthropic.com/)
+
+**Not a provider to route your primary traffic through** — this proxy exists to route *away* from Claude, not to it. This entry exists purely as an opt-in **final fallback candidate** for users who want a guarantee that a request eventually reaches a real Claude response after every free/cheap candidate above has failed.
+
+Get a key at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). In the Admin UI, paste it into `ANTHROPIC_API_KEY`. Do **not** set `MODEL`/`MODEL_OPUS`/`MODEL_SONNET`/`MODEL_HAIKU` to an `anthropic/` slug directly — instead add it as the last entry in a fallback chain, e.g. `MODEL_SONNET_FALLBACKS=open_router/openrouter/free,anthropic/claude-sonnet-4-5-20260514`. See [Ordered fallback chains per tier](#ordered-fallback-chains-per-tier) below.
+
+This is a genuine passthrough to `https://api.anthropic.com/v1` using your real Anthropic billing/credits, not a translated request — the model slug after `anthropic/` must be a real model ID from [Anthropic's model list](https://docs.anthropic.com/en/docs/about-claude/models).
+
 ### 18. Mix Providers By Model Tier
 
 Each model tier can use a different provider by setting `MODEL_OPUS`, `MODEL_SONNET`, and `MODEL_HAIKU` in the Admin UI. Leave a tier blank to inherit `MODEL`. These tier overrides apply to Claude model names that contain `opus`, `sonnet`, or `haiku`. Codex uses the Admin `MODEL` default through `fcc-codex` unless a session requests a provider-prefixed slug directly.
 
 For example, you can route Opus to `nvidia_nim/moonshotai/kimi-k2.6`, Sonnet to `open_router/openrouter/free`, Haiku to `lmstudio/qwen3.5-coder`, and keep the fallback `MODEL` on `zai/glm-5.1`.
+
+#### Ordered fallback chains per tier
+
+Each tier can also have an ordered list of fallback provider/model refs, tried in sequence if the primary ref for that tier fails with a retryable error (authentication failure, 429 rate limit, timeout, or 5xx). Set `MODEL_FALLBACKS` for a chain that applies to any tier without its own list, or `MODEL_OPUS_FALLBACKS` / `MODEL_SONNET_FALLBACKS` / `MODEL_HAIKU_FALLBACKS` for a tier-specific chain (these take priority over `MODEL_FALLBACKS` when both are set). Each is a comma-separated list of `provider_type/model/name` refs:
+
+```bash
+MODEL_SONNET=deepseek/deepseek-chat
+MODEL_SONNET_FALLBACKS=open_router/openrouter/free,ollama/llama3.1
+```
+
+With this configured, a request routed to Sonnet tries `deepseek/deepseek-chat` first. If DeepSeek returns an auth error, a 429, a timeout, or a 5xx, the proxy automatically retries the same logical request against `open_router/openrouter/free`, then `ollama/llama3.1`, stopping at the first candidate that succeeds. If every candidate fails, the final candidate's (mapped) error is what surfaces to the client — so the error you see names the last provider tried, not necessarily the first.
+
+Client-request errors (a 400-shaped "invalid request") are **not** retried across providers, since the same malformed or unsupported request would likely fail identically against the next provider too.
+
+A direct provider/model override in the model name itself (e.g. a client requesting `open_router/anthropic/claude-opus-4` directly, bypassing tier resolution) is treated as an explicit pin and never gets a fallback chain appended, regardless of `MODEL_FALLBACKS`.
+
+**Streaming tradeoff:** a tier with no fallback chain configured streams exactly as before (unchanged, byte-for-byte passthrough). A tier *with* a fallback chain configured has its response fully buffered server-side before any bytes reach the client — this is what makes it safe to retry a failed attempt against the next provider without ever risking a client seeing a partial or duplicate stream (e.g. two `message_start` events). The practical effect: fallback-enabled tiers lose time-to-first-token latency in exchange for that correctness guarantee. If a tier's requests are latency-sensitive and its primary provider is reliable, consider leaving that tier's fallback list empty.
+
+#### Real Anthropic API as a last-resort fallback candidate
+
+Every provider above swaps Claude out for a free/cheap alternative — that's the point of this proxy. But you can optionally add the real Anthropic API (`console.anthropic.com`) as the **final** candidate in a fallback chain, so a request only ever reaches your real Claude billing/credits after every free/cheap candidate has failed:
+
+```bash
+ANTHROPIC_API_KEY="sk-ant-..."
+MODEL_SONNET=deepseek/deepseek-chat
+MODEL_SONNET_FALLBACKS="open_router/openrouter/free,anthropic/claude-sonnet-4-5-20260514"
+```
+
+The model name after `anthropic/` must be a real Anthropic model ID your key has access to (e.g. from `https://docs.anthropic.com/en/docs/about-claude/models`) — this candidate is a genuine passthrough to the real API, not a translated/mapped request. Unlike every other provider, `anthropic` is never a sensible choice for the *primary* `MODEL`/`MODEL_OPUS`/`MODEL_SONNET`/`MODEL_HAIKU` ref, since that would defeat the purpose of this proxy; it exists specifically to be the last entry in a fallback list.
 
 <a id="connect-your-client"></a>
 

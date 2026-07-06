@@ -23,11 +23,13 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "lmstudio",
     "llamacpp",
     "ollama",
+    "anthropic",
 )
 
 
 def test_provider_catalog_key_order_matches_canonical_plan() -> None:
-    """NIM first; DeepSeek fourth; Wafer ninth / Kimi tenth (see contributor plan)."""
+    """NIM first; DeepSeek fourth; Wafer ninth / Kimi tenth; real Anthropic
+    (opt-in paid fallback-of-last-resort, not a default) last (see contributor plan)."""
 
     assert tuple(PROVIDER_CATALOG.keys()) == _EXPECTED_PROVIDER_ORDER
     assert SUPPORTED_PROVIDER_IDS == _EXPECTED_PROVIDER_ORDER

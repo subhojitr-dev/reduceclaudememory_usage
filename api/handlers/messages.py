@@ -115,9 +115,18 @@ class MessagesHandler:
         )
         if not changed:
             return routed
+        # Disable thinking on every candidate, not just the primary, and
+        # carry the full fallback chain forward. Constructing a fresh
+        # RoutedMessagesRequest without `candidates` would silently drop any
+        # configured fallbacks for safety-classifier requests.
+        new_candidates = tuple(
+            replace(candidate, thinking_enabled=False)
+            for candidate in routed.candidates
+        )
         return RoutedMessagesRequest(
             request=routed.request,
-            resolved=replace(routed.resolved, thinking_enabled=False),
+            resolved=new_candidates[0],
+            candidates=new_candidates,
         )
 
     def _run_message_intercepts(self, routed: RoutedMessagesRequest) -> object | None:

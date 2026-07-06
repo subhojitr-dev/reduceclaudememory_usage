@@ -17,6 +17,7 @@ from providers.error_mapping import (
     attach_provider_error_body,
     extract_provider_error_detail,
     format_provider_error_message,
+    is_retryable_via_different_provider,
     map_error,
     user_visible_message_for_mapped_provider_error,
 )
@@ -343,3 +344,48 @@ def test_streaming_transports_pass_scoped_rate_limiter_to_map_error():
         text = path.read_text(encoding="utf-8")
         assert "map_error(" in text, str(path)
         assert "rate_limiter=self._global_rate_limiter" in text, str(path)
+
+
+class TestIsRetryableViaDifferentProvider:
+    """Classification used by the provider fallback chain (api/provider_execution.py)."""
+
+    def test_authentication_error_is_retryable(self):
+        assert is_retryable_via_different_provider(AuthenticationError("bad key"))
+
+    def test_rate_limit_error_is_retryable(self):
+        assert is_retryable_via_different_provider(RateLimitError("too many requests"))
+
+    def test_overloaded_error_is_retryable(self):
+        assert is_retryable_via_different_provider(OverloadedError("overloaded"))
+
+    def test_timeout_stays_unmapped_and_is_retryable(self):
+        """map_error intentionally passes httpx timeouts through unmapped (so
+        get_user_facing_error_message can render its "timed out after Ns"
+        text); the retry classifier must recognize that raw shape directly."""
+        timeout = ReadTimeout("timed out", request=Request("POST", "http://test"))
+        mapped = map_error(timeout)
+        assert mapped is timeout
+        assert is_retryable_via_different_provider(mapped)
+
+    def test_server_5xx_api_error_is_retryable(self):
+        assert is_retryable_via_different_provider(
+            APIError("server error", status_code=500)
+        )
+        assert is_retryable_via_different_provider(
+            APIError("bad gateway", status_code=502)
+        )
+
+    def test_client_4xx_api_error_is_not_retryable(self):
+        assert not is_retryable_via_different_provider(
+            APIError("teapot", status_code=418)
+        )
+
+    def test_invalid_request_error_is_not_retryable(self):
+        assert not is_retryable_via_different_provider(
+            InvalidRequestError("bad request shape")
+        )
+
+    def test_unmapped_exception_is_not_retryable(self):
+        assert not is_retryable_via_different_provider(
+            ValueError("not a provider error")
+        )

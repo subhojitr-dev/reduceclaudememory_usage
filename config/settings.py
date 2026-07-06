@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # ==================== Cerebras Inference (OpenAI-compatible) ====================
     cerebras_api_key: str = Field(default="", validation_alias="CEREBRAS_API_KEY")
 
+    # ==================== Real Anthropic API (opt-in fallback, not a default) ====================
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+
     # ==================== Messaging Platform Selection ====================
     # Valid: "telegram" | "discord" | "none"
     messaging_platform: str = Field(
@@ -108,6 +111,23 @@ class Settings(BaseSettings):
     model_sonnet: str | None = Field(default=None, validation_alias="MODEL_SONNET")
     model_haiku: str | None = Field(default=None, validation_alias="MODEL_HAIKU")
 
+    # ==================== Provider/Model Fallback Chains ====================
+    # Optional ordered list of additional provider/model refs to try, per tier,
+    # when the primary (MODEL_OPUS/MODEL_SONNET/MODEL_HAIKU/MODEL) ref fails with
+    # a retryable error (auth error, 429, timeout, or 5xx). Comma-separated
+    # "provider_type/model/name" refs, evaluated in the order given.
+    # Example: MODEL_SONNET_FALLBACKS=open_router/openrouter/free,ollama/llama3.1
+    model_fallbacks: str = Field(default="", validation_alias="MODEL_FALLBACKS")
+    model_opus_fallbacks: str = Field(
+        default="", validation_alias="MODEL_OPUS_FALLBACKS"
+    )
+    model_sonnet_fallbacks: str = Field(
+        default="", validation_alias="MODEL_SONNET_FALLBACKS"
+    )
+    model_haiku_fallbacks: str = Field(
+        default="", validation_alias="MODEL_HAIKU_FALLBACKS"
+    )
+
     # ==================== Per-Provider Proxy ====================
     nvidia_nim_proxy: str = Field(default="", validation_alias="NVIDIA_NIM_PROXY")
     open_router_proxy: str = Field(default="", validation_alias="OPENROUTER_PROXY")
@@ -125,6 +145,7 @@ class Settings(BaseSettings):
     gemini_proxy: str = Field(default="", validation_alias="GEMINI_PROXY")
     groq_proxy: str = Field(default="", validation_alias="GROQ_PROXY")
     cerebras_proxy: str = Field(default="", validation_alias="CEREBRAS_PROXY")
+    anthropic_proxy: str = Field(default="", validation_alias="ANTHROPIC_PROXY")
 
     # ==================== Provider Rate Limiting ====================
     provider_rate_limit: int = Field(default=40, validation_alias="PROVIDER_RATE_LIMIT")
@@ -336,11 +357,10 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("model", "model_opus", "model_sonnet", "model_haiku")
-    @classmethod
-    def validate_model_format(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
+    @staticmethod
+    def _validate_single_model_ref(v: str) -> str:
+        """Validate one 'provider_type/model/name' ref. Shared by single-ref and
+        comma-separated fallback-list validators to keep the format rule DRY."""
         if "/" not in v:
             raise ValueError(
                 f"Model must be prefixed with provider type. "
@@ -352,6 +372,26 @@ class Settings(BaseSettings):
             supported = ", ".join(f"'{p}'" for p in SUPPORTED_PROVIDER_IDS)
             raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
         return v
+
+    @field_validator("model", "model_opus", "model_sonnet", "model_haiku")
+    @classmethod
+    def validate_model_format(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return cls._validate_single_model_ref(v)
+
+    @field_validator(
+        "model_fallbacks",
+        "model_opus_fallbacks",
+        "model_sonnet_fallbacks",
+        "model_haiku_fallbacks",
+    )
+    @classmethod
+    def validate_model_fallbacks_format(cls, v: str) -> str:
+        refs = [part.strip() for part in v.split(",") if part.strip()]
+        for ref in refs:
+            cls._validate_single_model_ref(ref)
+        return ",".join(refs)
 
     @model_validator(mode="after")
     def check_nvidia_nim_api_key(self) -> Settings:

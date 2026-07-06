@@ -27,6 +27,14 @@ class ResolvedModel:
 class RoutedMessagesRequest:
     request: MessagesRequest
     resolved: ResolvedModel
+    # Ordered candidates to attempt (resolved is always candidates[0]).
+    # Defaults to a single-candidate tuple so call sites that construct this
+    # directly (e.g. existing tests) keep single-provider behavior unchanged.
+    candidates: tuple[ResolvedModel, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.candidates:
+            object.__setattr__(self, "candidates", (self.resolved,))
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,14 +138,73 @@ class ModelRouter:
             return self._settings.enable_sonnet_thinking
         return self._settings.enable_model_thinking
 
+    def resolve_candidates(self, claude_model_name: str) -> tuple[ResolvedModel, ...]:
+        """Resolve a tier to an ordered list of candidates: primary first, then
+        any configured fallback provider/model refs for that tier.
+
+        Explicit direct provider/model overrides (e.g. a gateway-encoded model
+        id, or "provider/model" passed straight through) are treated as a
+        deliberate pin and never get fallbacks appended.
+        """
+        primary = self.resolve(claude_model_name)
+        direct_provider_id, direct_provider_model, _ = self._direct_provider_model(
+            claude_model_name
+        )
+        if direct_provider_id is not None and direct_provider_model is not None:
+            return (primary,)
+
+        seen = {(primary.provider_id, primary.provider_model)}
+        candidates = [primary]
+        for ref in self._fallback_refs(claude_model_name):
+            provider_id = parse_provider_type(ref)
+            provider_model = parse_model_name(ref)
+            key = (provider_id, provider_model)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(
+                ResolvedModel(
+                    original_model=claude_model_name,
+                    provider_id=provider_id,
+                    provider_model=provider_model,
+                    provider_model_ref=ref,
+                    thinking_enabled=primary.thinking_enabled,
+                )
+            )
+        if len(candidates) > 1:
+            logger.debug(
+                "MODEL FALLBACKS: '{}' -> {} candidate(s): {}",
+                claude_model_name,
+                len(candidates),
+                [c.provider_model_ref for c in candidates],
+            )
+        return tuple(candidates)
+
+    def _fallback_refs(self, claude_model_name: str) -> list[str]:
+        """Return the configured comma-separated fallback refs for a tier."""
+        name_lower = claude_model_name.lower()
+        if "opus" in name_lower:
+            raw = self._settings.model_opus_fallbacks
+        elif "haiku" in name_lower:
+            raw = self._settings.model_haiku_fallbacks
+        elif "sonnet" in name_lower:
+            raw = self._settings.model_sonnet_fallbacks
+        else:
+            raw = ""
+        raw = raw or self._settings.model_fallbacks
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
     def resolve_messages_request(
         self, request: MessagesRequest
     ) -> RoutedMessagesRequest:
         """Return an internal routed request context."""
-        resolved = self.resolve(request.model)
+        candidates = self.resolve_candidates(request.model)
+        resolved = candidates[0]
         routed = request.model_copy(deep=True)
         routed.model = resolved.provider_model
-        return RoutedMessagesRequest(request=routed, resolved=resolved)
+        return RoutedMessagesRequest(
+            request=routed, resolved=resolved, candidates=candidates
+        )
 
     def resolve_token_count_request(
         self, request: TokenCountRequest

@@ -200,3 +200,75 @@ def test_model_router_logs_mapping(settings):
     assert "MODEL MAPPING" in args[0]
     assert args[1] == "claude-2.1"
     assert args[2] == "fallback-model"
+
+
+def test_resolve_candidates_returns_single_candidate_when_no_fallbacks_configured(
+    settings,
+):
+    candidates = ModelRouter(settings).resolve_candidates("claude-2.1")
+
+    assert len(candidates) == 1
+    assert candidates[0].provider_model_ref == "nvidia_nim/fallback-model"
+
+
+def test_resolve_candidates_uses_global_fallback_list(settings):
+    settings.model_fallbacks = "open_router/free-model,ollama/llama3.1"
+
+    candidates = ModelRouter(settings).resolve_candidates("claude-2.1")
+
+    assert [c.provider_model_ref for c in candidates] == [
+        "nvidia_nim/fallback-model",
+        "open_router/free-model",
+        "ollama/llama3.1",
+    ]
+    # thinking_enabled propagates from the primary resolution to every candidate
+    assert all(c.thinking_enabled is True for c in candidates)
+
+
+def test_resolve_candidates_prefers_tier_specific_fallback_over_global(settings):
+    settings.model_sonnet = "nvidia_nim/sonnet-model"
+    settings.model_sonnet_fallbacks = "open_router/sonnet-fallback"
+    settings.model_fallbacks = "ollama/should-not-be-used"
+
+    candidates = ModelRouter(settings).resolve_candidates("claude-sonnet-4-20250514")
+
+    assert [c.provider_model_ref for c in candidates] == [
+        "nvidia_nim/sonnet-model",
+        "open_router/sonnet-fallback",
+    ]
+
+
+def test_resolve_candidates_dedupes_fallback_matching_primary(settings):
+    settings.model_fallbacks = "nvidia_nim/fallback-model,open_router/free-model"
+
+    candidates = ModelRouter(settings).resolve_candidates("claude-2.1")
+
+    # The first fallback entry duplicates the primary and must be skipped.
+    assert [c.provider_model_ref for c in candidates] == [
+        "nvidia_nim/fallback-model",
+        "open_router/free-model",
+    ]
+
+
+def test_resolve_candidates_ignores_fallbacks_for_direct_provider_pin(settings):
+    settings.model_fallbacks = "open_router/free-model"
+
+    candidates = ModelRouter(settings).resolve_candidates("deepseek/deepseek-chat")
+
+    assert len(candidates) == 1
+    assert candidates[0].provider_id == "deepseek"
+
+
+def test_resolve_messages_request_carries_candidates(settings):
+    settings.model_fallbacks = "open_router/free-model"
+
+    request = MessagesRequest(
+        model="claude-2.1",
+        max_tokens=100,
+        messages=[Message(role="user", content="hello")],
+    )
+    routed = ModelRouter(settings).resolve_messages_request(request)
+
+    assert len(routed.candidates) == 2
+    assert routed.resolved is routed.candidates[0]
+    assert routed.candidates[1].provider_model_ref == "open_router/free-model"

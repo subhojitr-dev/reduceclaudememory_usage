@@ -6,10 +6,16 @@ import ast
 from pathlib import Path
 
 # `api` may only import this narrow ``providers`` surface (see AGENTS.md).
+# ``providers.error_mapping`` is shared cross-cutting classification logic used
+# by every provider transport (not a per-adapter subpackage), so it belongs
+# here alongside ``providers.exceptions`` -- this is what lets the provider
+# fallback chain (api/provider_execution.py) reuse the single canonical
+# retryable-error classification instead of duplicating status-code logic.
 _API_ALLOWED_PROVIDER_MODULES = frozenset(
     {
         "providers",
         "providers.base",
+        "providers.error_mapping",
         "providers.exceptions",
         "providers.runtime",
     }

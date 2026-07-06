@@ -327,3 +327,30 @@ def map_error(
         return APIError(message, status_code=status, raw_error=str(e))
 
     return e
+
+
+def is_retryable_via_different_provider(mapped: Exception) -> bool:
+    """Return True if a *mapped* provider error should trigger a fallback
+    attempt against the next configured provider/model candidate.
+
+    Retryable-via-different-provider covers: authentication failures (the
+    configured key/provider is broken), rate limiting (429), transient
+    server-side failures (5xx, overload), and connection-level timeouts.
+    Client-request errors (``InvalidRequestError``, 4xx other than 429) are
+    NOT retried across providers, since the same malformed/unsupported
+    request would likely fail identically against the next provider too.
+
+    Callers must pass the exception *after* it has gone through
+    :func:`map_error` so this stays the single source of truth for error
+    classification (no duplicated status-code logic at call sites). Note
+    that :func:`map_error` deliberately leaves ``httpx.TimeoutException``
+    unmapped (passthrough) so :func:`core.anthropic.get_user_facing_error_message`
+    can render its specific "timed out after Ns" text; this function checks
+    for that raw, still-unmapped timeout shape directly rather than having
+    :func:`map_error` convert it (which would break that message).
+    """
+    if isinstance(mapped, (AuthenticationError, RateLimitError, OverloadedError)):
+        return True
+    if isinstance(mapped, APIError):
+        return mapped.status_code >= 500
+    return isinstance(mapped, httpx.TimeoutException)

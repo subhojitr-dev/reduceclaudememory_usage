@@ -36,6 +36,9 @@ ZAI_DEFAULT_BASE = "https://api.z.ai/api/anthropic/v1"
 GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GROQ_DEFAULT_BASE = "https://api.groq.com/openai/v1"
 CEREBRAS_DEFAULT_BASE = "https://api.cerebras.ai/v1"
+# Real Anthropic API (console.anthropic.com) - used as an opt-in fallback
+# candidate for users with real Anthropic credits/billing, not a default.
+ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,12 +284,24 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "local",
         ),
     ),
+    "anthropic": ProviderDescriptor(
+        provider_id="anthropic",
+        display_name="Anthropic (real Claude API)",
+        transport_type="anthropic_messages",
+        credential_env="ANTHROPIC_API_KEY",
+        credential_url="https://console.anthropic.com/settings/keys",
+        credential_attr="anthropic_api_key",
+        default_base_url=ANTHROPIC_DEFAULT_BASE,
+        proxy_attr="anthropic_proxy",
+        capabilities=("chat", "streaming", "tools", "thinking", "native_anthropic"),
+    ),
 }
 
 # Key order:
 # NVIDIA NIM first (README default), DeepSeek fourth, Wafer ninth / Kimi tenth; then cerebras /
 # groq / fireworks / Cloudflare overlap; remainder and locals last per project plan (
-# github.com/cheahjs/free-llm-api-resources Free Providers TOC as rough guide beyond fixed slots).
+# github.com/cheahjs/free-llm-api-resources Free Providers TOC as rough guide beyond fixed slots);
+# real Anthropic (opt-in paid fallback-of-last-resort, not a default) sorted absolute last.
 # ``SUPPORTED_PROVIDER_IDS`` inherits this insertion order for UI and error-message listing.
 SUPPORTED_PROVIDER_IDS: tuple[str, ...] = tuple(PROVIDER_CATALOG.keys())
 
